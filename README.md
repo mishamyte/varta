@@ -11,13 +11,14 @@ It can also tell you what a *reader* wants, without touching a key at all.
 
 ![Main menu](screenshots/menu.png)
 
-## Why a whole app for one key
+## Why a whole app for one system
 
-A Варта-М key is an ordinary T5577 chip broadcasting an EM4100 ID. What makes it awkward is that
-the anti-copy scheme is **the same on every key ever made** - one shared password, one shared
-marker word hidden in the chip, and the reader checks that marker before it opens.
+A Варта-М key is an ordinary T5577 chip broadcasting an EM4100 ID. What makes the system awkward
+is that its anti-copy scheme is **the same on every key ever made** - one shared password, one
+shared marker word hidden in the chip, and the reader checks that marker before it opens.
 
-So a plain EM4100 clone of a Varta key does not work. But the ID is the only thing that differs
+So a plain EM4100 clone of a Варта-М key does not work, and a generic RFID app will read the ID
+and still leave you with a fob that opens nothing. But the ID is the only thing that differs
 between keys, which means **the number on the fob is enough to rebuild the whole key**. That is
 what this app does.
 

@@ -29,8 +29,7 @@ static void varta_app_scene_check_reader_doing(VartaApp* app, const VartaReaderR
 }
 
 // The one record of a run. For VartaReaderOther the password is a finding about someone else's
-// installation and the result screen is the only place it appears - press Back and it is gone,
-// so it goes in the log too.
+// installation and it lives only until Back, so the log is the copy that outlasts it.
 static bool varta_app_scene_check_reader_conclude(VartaApp* app) {
     const VartaReaderResult* result = &app->reader_result;
 

@@ -12,10 +12,12 @@
  *
  * That detector is the one proven in applications_user/lfgap; this adds the decode.
  *
- * Measured on a Varta reader, 2026-10-27, nine frames: symbols fall in two classes, 169-370 us
- * and 607-755 us, with 237 us of empty space between them. Every clean frame decoded identically
- * to a page-0 passworded read of block 6 with password FFA94A50 - the first direct confirmation
- * of what the rest of this app had only inferred from which tags open a door.
+ * Measured on a Varta reader, 2026-10-27: symbols fall in two classes ending at 370 us and
+ * starting at 607, with 237 us of empty space between them. A 12 second capture gave 15 frames
+ * with a longest agreeing run of 7, class means 349 and 636 us against the 480 us split, and
+ * every agreeing frame decoded to a page-0 passworded read of block 6 with password FFA94A50 -
+ * the first direct confirmation of what the rest of this app had only inferred from which tags
+ * open a door.
  *
  * @warning Listening only. Nothing here energises the coil or sends a frame, so no password can
  * reach a tag by this path - which is what makes pointing it at an unknown reader safe.
@@ -38,8 +40,8 @@
 /** Where one symbol class ends and the other begins, in microseconds.
  *
  * Measured, not chosen: the two classes are 237 us apart and nothing lands between them. The gap
- * probe originally split at 350, which is inside the short class - most short symbols counted as
- * long, and the resulting histogram described a reader that does not exist.
+ * probe originally split at 350, which is inside the short class - about half the short symbols
+ * counted as long, and the resulting histogram described a reader that does not exist.
  */
 #define VARTA_READER_SPLIT_US 480
 
@@ -99,8 +101,8 @@ void varta_reader_stop(VartaReader* reader);
 
 /** What has been heard so far. Safe to call while listening, and what supports a verdict is
  * never retracted by listening on: agreed, burst and the decoded command are the best of the
- * run, so a caller can stop as soon as varta_reader_confirmed() is true. bits, short_us and
- * long_us are the latest measurement.
+ * run, so a caller can stop as soon as varta_reader_confirmed() is true. bits is the last whole
+ * frame's length, and short_us/long_us are running means over the whole window.
  */
 void varta_reader_read(const VartaReader* reader, VartaReaderResult* result);
 

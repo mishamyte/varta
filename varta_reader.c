@@ -18,14 +18,19 @@
 
 /** Symbols in the longest burst below which nothing structured was heard.
  *
- * VARTA_READER_FRAME_MIN, not a number of its own: six symbols is the shortest addressed T5577
- * command, so a shorter burst cannot be one by construction. It was 3 on the theory that ripple
- * produces "ones and twos", until a reader from another system produced five.
+ * Deliberately BELOW VARTA_READER_FRAME_MIN, and it must stay there. Setting the two equal makes
+ * this guard unreachable: symbol_burst is recorded before the FRAME_MIN early return and frames++
+ * follows it, so a burst of FRAME_MIN or more always leaves frames >= 1, and this test only runs
+ * when frames == 0.
  *
- * Getting this wrong has a direction - it would report a protected reader as one that asks for
- * nothing - so it only ever moves a reader between two verdicts that claim nothing either way.
+ * Three is not a measurement of ripple - a Flipper reading a tag scored 2 but an EM4100-only
+ * reader scored 5. It is the length below which a burst tells us nothing either way, and the
+ * point of the gate is the direction of its error: at marginal coupling a missed gap stretches
+ * an interval past PAUSE_US and chops a real 38-symbol frame into sub-6 pieces, so a protected
+ * reader measures 5 with 132 in-band gaps. Catching that as "could not decode" is honest;
+ * letting it fall through to "no commands heard" calls an interrogating reader silent.
  */
-#define VARTA_READER_QUIET_BURST VARTA_READER_FRAME_MIN
+#define VARTA_READER_QUIET_BURST 3
 
 /** A stall longer than this is a gap rather than the time between two carrier edges.
  *
@@ -101,9 +106,9 @@ struct VartaReader {
     // outside the band left the whole screen reading zero, and ripple has to be visible without
     // being counted as something said.
     volatile uint32_t stalls;
-    // The longest run of stalls arriving closer together than a frame gap. `burst` cannot answer
-    // this: it is only written for symbols that passed the band filter, so a reader whose gaps
-    // miss the band leaves it at zero however much it says.
+    // The longest run of stalls arriving closer together than a frame gap. symbol_burst cannot
+    // answer this: it is only written for symbols that passed the band filter, so a reader whose
+    // gaps miss the band leaves it at zero however much it says.
     volatile uint32_t last_stall_at; // raw DWT count of the previous stall, in band or not
     volatile bool have_stall;
     volatile uint8_t stall_run; // the run in progress, which a pause ends
@@ -179,17 +184,17 @@ static void varta_reader_account(VartaReader* reader, uint32_t began_at, uint32_
     reader->stalls++;
 
     // Clustering, measured on every stall rather than only the ones the band accepts. Evidence
-    // only: it was tried as a discriminator and does not work - open air clusters at 6, a quiet
-    // reader at 81, a talking one at 22, so it separates bursty noise from even noise rather
-    // than speech from silence. It still says more about a reader than a bare count does.
+    // only: it was tried as a discriminator and does not work - open air clusters at 6, a Flipper
+    // doing an LF read at 81, an EM4100-only reader at 22. That is bursty noise against even
+    // noise, not speech against silence.
     const uint32_t since_stall = began_at - reader->last_stall_at;
     const bool clustered = reader->have_stall &&
                            since_stall < VARTA_READER_PAUSE_US * cycles_per_us;
 
     // One load apiece, as everywhere else in this handler: every field here is volatile.
     // Saturating is safe to report bare, unlike the symbol store's cap: stall_burst is only ever
-    // compared against VARTA_READER_QUIET_BURST, and a framed reader cannot reach 255 because
-    // its 13.76 ms of silence between frames ends the run long before that.
+    // only ever printed, and a framed reader cannot reach 255 because its silence between frames
+    // ends the run long before that.
     uint8_t stall_run = clustered ? reader->stall_run : 0;
 
     if(stall_run < UINT8_MAX) stall_run++;
@@ -447,7 +452,7 @@ void varta_reader_read(const VartaReader* reader, VartaReaderResult* result) {
     result->stalls = reader->stalls;
     result->stall_burst = reader->stall_burst;
     result->symbol_burst = reader->symbol_burst;
-    result->symbol_burst_capped = result->symbol_burst >= VARTA_READER_FRAME_MAX;
+    const uint8_t pending = reader->periods;
     const uint32_t short_count = reader->short_count;
     const uint32_t short_sum = reader->short_sum_us;
     const uint32_t long_count = reader->long_count;
@@ -455,6 +460,12 @@ void varta_reader_read(const VartaReader* reader, VartaReaderResult* result) {
     const bool stalled = reader->in_gap;
     FURI_CRITICAL_EXIT();
 
+    // The run in flight when the window closed never reached frame_done(), which only fires on
+    // the NEXT pause - so without this, frames and symbol_burst are blind to the first two frames
+    // of an encounter and to the last one, and a reader heard for 300 ms reports zero.
+    if(pending > result->symbol_burst) result->symbol_burst = pending;
+
+    result->symbol_burst_capped = result->symbol_burst >= VARTA_READER_FRAME_MAX;
     result->short_us = short_count ? short_sum / short_count : 0;
     result->long_us = long_count ? long_sum / long_count : 0;
 
@@ -476,11 +487,12 @@ void varta_reader_read(const VartaReader* reader, VartaReaderResult* result) {
             return;
         }
 
-        // A carrier, and nothing this could use. Deliberately NOT a finding that the reader is
-        // unprotected: a verdict for that was built and withdrawn, because no threshold on any
-        // of these counts survived contact with the next reader - a read-only one from another
-        // system scored higher on both discriminators than a Flipper doing the same job. The
-        // only reliable test for an unprotected reader is to emulate an EM4100 ID at it.
+        // Nothing this could use - and deliberately NOT a finding that the reader is
+        // unprotected, nor that a carrier was there at all. A verdict for the first was built
+        // and withdrawn: no threshold survived the next reader, because a read-only one from
+        // another system outscored a Flipper doing the same job on symbol burst while
+        // undercutting it on clustering. As for the second, one stray in-band stall is enough
+        // to disqualify NoField above, so this is also where an empty coil can land.
         result->verdict = VartaReaderQuiet;
         return;
     }

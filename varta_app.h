@@ -75,7 +75,7 @@
 
 /** What a read made of the tag on the coil.
  *
- * Not ordered by anything: the first four are reasons a tag never reached the marker read, and
+ * Not ordered by anything: the first six are reasons a tag never reached the marker read, and
  * the last three are what the marker read came back with. Nothing compares these.
  */
 typedef enum {

@@ -12,7 +12,7 @@ typedef struct {
     const Icon* icon;
 } VartaReaderText;
 
-// Nothing was concluded, so neither padlock may appear. Spelled once because it is both the
+// Nothing was concluded, so no padlock may appear. Spelled once because it is both the
 // Unknown row and the fallback, and a screen described in two places drifts in one of them.
 static const VartaReaderText varta_result_undecodable = {
     "Can't decode",
@@ -26,13 +26,19 @@ static VartaReaderText varta_app_scene_check_reader_result_text(VartaReaderVerdi
     case VartaReaderVarta:
         return (VartaReaderText){"Varta reader", "", &I_VartaFob_33x42};
     case VartaReaderOther:
-        return (VartaReaderText){"Other scheme", "", &I_VartaLocked_31x40};
+        // The length cannot tell a passworded read from a plain write - both are 38 bits, and
+        // the lock bit this checks is a data bit in a write. The password below may be a word
+        // that reader writes into tags, which matters because this app writes passwords.
+        return (VartaReaderText){
+            "Other scheme", "May be a write -\nsame length", &I_VartaLocked_31x40};
     case VartaReaderQuiet:
         // No open padlock anywhere in this table: the verdict that would have earned one was
-        // withdrawn because nothing here can measure it. A picture must not make a claim the
-        // words refuse.
+        // withdrawn because nothing here can measure it. The words claim as little as the
+        // picture: not that a reader said nothing - a frame chopped by poor coupling lands
+        // here - and not that a carrier was present, since one stray in-band stall is enough
+        // to rule out "No reader".
         return (VartaReaderText){
-            "No commands", "Carrier, but no\ncommands heard", &I_WarningDolphinFlip_45x42};
+            "Nothing read", "No command this\napp could parse", &I_WarningDolphinFlip_45x42};
     case VartaReaderUnknown:
         return varta_result_undecodable;
     case VartaReaderNoField:
@@ -88,10 +94,15 @@ void varta_app_scene_check_reader_result_on_enter(void* context) {
         widget_add_string_element(
             app->widget, 0, 40, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(line));
     } else if(!decoded) {
-        // The number the open padlock turns on, on the screen where someone would dispute it:
-        // a command is gaps half a millisecond apart, so a long run is the evidence that
-        // something was said even when none of it parsed.
-        furi_string_printf(line, "Longest run: %u", result->stall_burst);
+        // The figure that actually settled this verdict, against VARTA_READER_QUIET_BURST, so
+        // someone who disbelieves it has the deciding number rather than a related one. It was
+        // stall_burst here, which decides nothing and runs the wrong way: a Flipper reading a
+        // tag scores higher on it than a reader sending commands.
+        furi_string_printf(
+            line,
+            "In-band run: %u%s",
+            result->symbol_burst,
+            result->symbol_burst_capped ? "+" : "");
         widget_add_string_element(
             app->widget, 0, 40, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(line));
     }
