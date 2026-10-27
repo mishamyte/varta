@@ -3,8 +3,9 @@
 
 typedef struct {
     const char* title;
-    // Empty where the title, the password and the icon already say it. Only the verdicts with
-    // nothing to show carry a line, and it says what to do rather than what happened.
+    // Empty where the title, the password and the icon already say it. Otherwise what to do
+    // where the user can act, and what the verdict deliberately does not claim where they
+    // cannot.
     const char* detail;
     // In this table rather than beside it: the icon is the loudest security claim on the screen,
     // so a verdict added later should not be able to get a warning for its words and the default
@@ -29,8 +30,7 @@ static VartaReaderText varta_app_scene_check_reader_result_text(VartaReaderVerdi
         // The length cannot tell a passworded read from a plain write - both are 38 bits, and
         // the lock bit this checks is a data bit in a write. The password below may be a word
         // that reader writes into tags, which matters because this app writes passwords.
-        return (VartaReaderText){
-            "Other scheme", "May be a write -\nsame length", &I_VartaLocked_31x40};
+        return (VartaReaderText){"Other scheme", "May be a write", &I_VartaLocked_31x40};
     case VartaReaderQuiet:
         // No open padlock anywhere in this table: the verdict that would have earned one was
         // withdrawn because nothing here can measure it. The words claim as little as the
@@ -93,11 +93,10 @@ void varta_app_scene_check_reader_result_on_enter(void* context) {
         furi_string_printf(line, "Unconfirmed: %u/%u", result->agreed, VARTA_READER_FRAMES_AGREE);
         widget_add_string_element(
             app->widget, 0, 40, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(line));
-    } else if(!decoded) {
-        // The figure that actually settled this verdict, against VARTA_READER_QUIET_BURST, so
-        // someone who disbelieves it has the deciding number rather than a related one. It was
-        // stall_burst here, which decides nothing and runs the wrong way: a Flipper reading a
-        // tag scores higher on it than a reader sending commands.
+    } else if(result->verdict != VartaReaderNoField) {
+        // The figure this verdict was settled on, against VARTA_READER_QUIET_BURST, so someone
+        // who disbelieves it has the deciding number. Not for NoField, where gaps == 0 is one of
+        // the gates and so this is 0 by construction - a number that cannot vary is not evidence.
         furi_string_printf(
             line,
             "In-band run: %u%s",

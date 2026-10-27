@@ -37,14 +37,13 @@ static bool varta_app_scene_check_reader_conclude(VartaApp* app) {
     // the opcode and lock gates, so a verdict that did not decode already carries zeroes here.
     FURI_LOG_I(
         TAG,
-        "verdict %u pwd %08lX blk %u page %u | %lu stalls, run %u | %lu gaps %lu frames "
+        "verdict %u pwd %08lX blk %u page %u | %lu stalls %lu gaps %lu frames "
         "%u symbols%s | %u last-frame bits %u agreed | %lu / %lu us",
         result->verdict,
         (unsigned long)result->password,
         result->block,
         result->page1 ? 1 : 0,
         (unsigned long)result->stalls,
-        result->stall_burst,
         (unsigned long)result->gaps,
         (unsigned long)result->frames,
         result->symbol_burst,

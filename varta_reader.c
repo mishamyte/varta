@@ -18,19 +18,17 @@
 
 /** Symbols in the longest burst below which nothing structured was heard.
  *
- * Deliberately BELOW VARTA_READER_FRAME_MIN, and it must stay there. Setting the two equal makes
- * this guard unreachable: symbol_burst is recorded before the FRAME_MIN early return and frames++
- * follows it, so a burst of FRAME_MIN or more always leaves frames >= 1, and this test only runs
- * when frames == 0.
- *
- * Three is not a measurement of ripple - a Flipper reading a tag scored 2 but an EM4100-only
- * reader scored 5. It is the length below which a burst tells us nothing either way, and the
- * point of the gate is the direction of its error: at marginal coupling a missed gap stretches
- * an interval past PAUSE_US and chops a real 38-symbol frame into sub-6 pieces, so a protected
- * reader measures 5 with 132 in-band gaps. Catching that as "could not decode" is honest;
- * letting it fall through to "no commands heard" calls an interrogating reader silent.
+ * Not a measurement of ripple - a Flipper reading a tag scored 2 but an EM4100-only reader
+ * scored 5. It is the length below which a burst tells us nothing either way, and what matters
+ * is the direction of its error: at marginal coupling a missed gap stretches an interval past
+ * PAUSE_US and chops a real 38-symbol frame into sub-6 pieces, so a protected reader measures 5
+ * with 132 in-band gaps. Catching that as "could not decode" is honest; letting it fall through
+ * to a verdict that says nothing was said calls an interrogating reader silent.
  */
 #define VARTA_READER_QUIET_BURST 3
+static_assert(
+    VARTA_READER_QUIET_BURST < VARTA_READER_FRAME_MIN,
+    "a burst of FRAME_MIN already counted a frame, so this guard would never run");
 
 /** A stall longer than this is a gap rather than the time between two carrier edges.
  *
@@ -106,13 +104,6 @@ struct VartaReader {
     // outside the band left the whole screen reading zero, and ripple has to be visible without
     // being counted as something said.
     volatile uint32_t stalls;
-    // The longest run of stalls arriving closer together than a frame gap. symbol_burst cannot
-    // answer this: it is only written for symbols that passed the band filter, so a reader whose
-    // gaps miss the band leaves it at zero however much it says.
-    volatile uint32_t last_stall_at; // raw DWT count of the previous stall, in band or not
-    volatile bool have_stall;
-    volatile uint8_t stall_run; // the run in progress, which a pause ends
-    volatile uint8_t stall_burst; // the best run, which is what gets reported
     volatile uint8_t symbol_burst; // longest run of in-band symbols between two pauses
 
     volatile uint32_t short_count;
@@ -183,27 +174,11 @@ static void varta_reader_account(VartaReader* reader, uint32_t began_at, uint32_
     // Before the band test, so a reader this cannot measure is still visible as something.
     reader->stalls++;
 
-    // Clustering, measured on every stall rather than only the ones the band accepts. Evidence
-    // only: it was tried as a discriminator and does not work - open air clusters at 6, a Flipper
-    // doing an LF read at 81, an EM4100-only reader at 22. That is bursty noise against even
-    // noise, not speech against silence.
-    const uint32_t since_stall = began_at - reader->last_stall_at;
-    const bool clustered = reader->have_stall &&
-                           since_stall < VARTA_READER_PAUSE_US * cycles_per_us;
-
-    // One load apiece, as everywhere else in this handler: every field here is volatile.
-    // Saturating is safe to report bare, unlike the symbol store's cap: stall_burst is only ever
-    // only ever printed, and a framed reader cannot reach 255 because its silence between frames
-    // ends the run long before that.
-    uint8_t stall_run = clustered ? reader->stall_run : 0;
-
-    if(stall_run < UINT8_MAX) stall_run++;
-
-    reader->stall_run = stall_run;
-    reader->have_stall = true;
-    reader->last_stall_at = began_at;
-
-    if(stall_run > reader->stall_burst) reader->stall_burst = stall_run;
+    // Clustering - the longest run of stalls closer together than a frame gap - was measured
+    // here and has been removed. It does not discriminate: open air clustered at 6, a Flipper
+    // doing an LF read at 81, an EM4100-only reader at 22, which is bursty noise against even
+    // noise rather than speech against silence. See the clustering fields in commit a374bd0 if
+    // it is ever worth re-measuring.
 
     // Plus the threshold: the stall was already that old when the timer reached reload and told
     // us about it, so without it every width would read 20 us short of the band it is tested on.
@@ -394,9 +369,6 @@ void varta_reader_start(VartaReader* reader) {
     reader->frames = 0;
     reader->gaps = 0;
     reader->stalls = 0;
-    reader->have_stall = false;
-    reader->stall_run = 0;
-    reader->stall_burst = 0;
     reader->symbol_burst = 0;
     reader->short_count = 0;
     reader->short_sum_us = 0;
@@ -421,6 +393,14 @@ void varta_reader_stop(VartaReader* reader) {
     LL_TIM_DisableIT_UPDATE(TIM2);
     LL_TIM_DisableIT_TRIG(TIM2);
     LL_TIM_DisableCounter(TIM2);
+
+    // Close a run the window interrupted. frame_done() fires at the NEXT pause, so a complete
+    // frame still waiting for one was left in period_us[] and reported as "could not decode".
+    // Safe here: the counter and both interrupts are off, so nothing else touches the state. The
+    // exact-length gate means this can only add a decode - never move a count or break a run.
+    if(reader->aligned && reader->periods == VARTA_READER_FRAME_BITS) {
+        varta_reader_frame_done(reader);
+    }
 
     furi_hal_interrupt_set_isr(FuriHalInterruptIdTIM2, NULL, NULL);
     furi_hal_bus_disable(FuriHalBusTIM2);
@@ -450,7 +430,6 @@ void varta_reader_read(const VartaReader* reader, VartaReaderResult* result) {
     result->frames = reader->frames;
     result->gaps = reader->gaps;
     result->stalls = reader->stalls;
-    result->stall_burst = reader->stall_burst;
     result->symbol_burst = reader->symbol_burst;
     const uint8_t pending = reader->periods;
     const uint32_t short_count = reader->short_count;
@@ -460,12 +439,14 @@ void varta_reader_read(const VartaReader* reader, VartaReaderResult* result) {
     const bool stalled = reader->in_gap;
     FURI_CRITICAL_EXIT();
 
-    // The run in flight when the window closed never reached frame_done(), which only fires on
-    // the NEXT pause - so without this, frames and symbol_burst are blind to the first two frames
-    // of an encounter and to the last one, and a reader heard for 300 ms reports zero.
-    if(pending > result->symbol_burst) result->symbol_burst = pending;
+    // The run in flight when the window closed never reached frame_done(), which only fires at
+    // the NEXT pause - so without this a reader heard for 300 ms reports zero. Through a local
+    // because the critical exit is an opaque call, so the field would be re-read across it.
+    // Note `frames` is NOT folded: it stays the count frame_done() actually reached.
+    const uint8_t burst = pending > result->symbol_burst ? pending : result->symbol_burst;
 
-    result->symbol_burst_capped = result->symbol_burst >= VARTA_READER_FRAME_MAX;
+    result->symbol_burst = burst;
+    result->symbol_burst_capped = burst >= VARTA_READER_FRAME_MAX;
     result->short_us = short_count ? short_sum / short_count : 0;
     result->long_us = long_count ? long_sum / long_count : 0;
 

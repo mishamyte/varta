@@ -49,17 +49,26 @@
 typedef enum {
     /** Nothing on the coil: no carrier at all. */
     VartaReaderNoField,
-    /** A carrier, and nothing this decoder could use. An observation, never a verdict about
-     * the reader's security: one whose gaps fall outside the measured band is silent to this
-     * and protected all the same. There is deliberately no verdict for "unprotected" - see
-     * varta_reader_read() for why the measurements will not carry one.
+    /** Nothing this decoder could use - and not a claim that a carrier was there at all, since
+     * one stray in-band stall is enough to rule out VartaReaderNoField. An observation, never a
+     * verdict about the reader's security: one whose gaps fall outside the measured band is
+     * silent to this and protected all the same. There is deliberately no verdict for
+     * "unprotected" - see varta_reader_read() for why the measurements will not carry one.
      */
     VartaReaderQuiet,
-    /** Gaps that never resolved into a frame this understands. */
+    /** Gaps that never resolved into a frame this understands - including a whole frame that
+     * resolved and then failed the opcode or lock-bit gate.
+     */
     VartaReaderUnknown,
     // Not ordered by anything. Nothing compares these, and `>= VartaReaderOther` happening to
     // mean "decoded" today is the respelling varta_reader_decoded() exists to prevent.
-    /** A passworded read, but not of VARTA_MARKER_BLOCK with VARTA_PASSWORD. */
+    /** A 38-bit frame with a read opcode and a clear lock bit, addressed somewhere other than
+     * VARTA_MARKER_BLOCK or asking a password other than VARTA_PASSWORD.
+     *
+     * The canonical statement of the ambiguity this app repeats elsewhere: a plain WRITE is also
+     * 38 bits, and the lock bit checked here is a data bit in one, so `password` may be a word
+     * this reader writes into tags rather than one it asks for.
+     */
     VartaReaderOther,
     /** A page-0 passworded read of block 6 with the Varta password. */
     VartaReaderVarta,
@@ -81,8 +90,8 @@ typedef struct {
     uint32_t frames; // whole frames seen
     uint32_t gaps; // carrier stalls in the band, decoded or not
     uint32_t stalls; // every completed stall, including the ones the band rejected
-    uint8_t stall_burst; // longest run of stalls closer together than a frame gap
-    uint8_t symbol_burst; // longest in-band burst, frame or not, up to the store's cap
+    uint8_t symbol_burst; // longest in-band run, frame or not and including the one still in
+        // flight, up to the store's cap
     bool symbol_burst_capped; // it hit that cap, so the real run was at least that long
     uint32_t short_us; // mean of each symbol class, for checking the split still separates them
     uint32_t long_us;
@@ -101,7 +110,8 @@ void varta_reader_stop(VartaReader* reader);
 
 /** What has been heard so far. Safe to call while listening, and what supports a verdict is
  * never retracted by listening on: agreed, burst and the decoded command are the best of the
- * run, so a caller can stop as soon as varta_reader_confirmed() is true. bits is the last whole
+ * agreed, symbol_burst and the decoded command are the best of the run, so a caller can stop
+ * as soon as varta_reader_confirmed() is true. bits is the last whole
  * frame's length, and short_us/long_us are running means over the whole window.
  */
 void varta_reader_read(const VartaReader* reader, VartaReaderResult* result);
