@@ -93,10 +93,12 @@ void varta_app_scene_check_reader_result_on_enter(void* context) {
         furi_string_printf(line, "Unconfirmed: %u/%u", result->agreed, VARTA_READER_FRAMES_AGREE);
         widget_add_string_element(
             app->widget, 0, 40, AlignLeft, AlignTop, FontSecondary, furi_string_get_cstr(line));
-    } else if(result->verdict != VartaReaderNoField) {
+    } else if(!decoded && result->verdict != VartaReaderNoField) {
         // The figure this verdict was settled on, against VARTA_READER_QUIET_BURST, so someone
-        // who disbelieves it has the deciding number. Not for NoField, where gaps == 0 is one of
-        // the gates and so this is 0 by construction - a number that cannot vary is not evidence.
+        // who disbelieves it has the deciding number. Only where nothing decoded: a confirmed
+        // read has its answer on the line above. Not for NoField either, where gaps == 0 is one
+        // of the gates and so this is 0 by construction - a number that cannot vary is not
+        // evidence.
         furi_string_printf(
             line,
             "In-band run: %u%s",
